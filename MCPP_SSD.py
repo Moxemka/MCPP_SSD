@@ -1,4 +1,5 @@
 ﻿print('loading APIs')
+
 from asyncio.windows_events import NULL
 from email.mime import image
 from shutil import ExecError
@@ -8,18 +9,20 @@ import cv2
 import numpy as np
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Conv2D, MaxPooling2D, Dense, Flatten, Dropout
-from keras.layers import BatchNormalization
-from keras.optimizers import SGD
+from tensorflow.keras.layers import BatchNormalization
+from tensorflow.keras.optimizers import SGD
 from tensorflow.keras.models import load_model
 from matplotlib import pyplot as plt
 
 print('loaded :)')
-directory = 'Planes' ##directory for planes
-
+directory = 'test_data' ##directory for data
+image_WH = 256
+bathsize = 10
 ##in case of gpu limit memory causing OOM exeption
 gpus = tf.config.experimental.list_physical_devices('GPU')
 for gpu in gpus: 
     tf.config.experimental.set_memory_growth(gpu, True)
+print(f'found {len(gpus)} GPUs: {gpus}')
 
 
 #this function creates a file of hist with defined name
@@ -88,7 +91,6 @@ def model_design(image_h, image_w):
     model.add(BatchNormalization())
 
     model.add(Conv2D(32, (3, 3), activation='relu', kernel_initializer='he_uniform', padding='same'))
-    model.add(BatchNormalization())
     model.add(MaxPooling2D((2, 2)))
 
     model.add(Conv2D(64, (3, 3), activation='relu', kernel_initializer='he_uniform', padding='same'))
@@ -118,12 +120,11 @@ def model_design(image_h, image_w):
 ##train and test trained model
 def train_N_test_model(epocs_num):
 
-    image_data = tf.keras.utils.image_dataset_from_directory(directory, label_mode='categorical', labels="inferred", batch_size=20) #creating tensor data from images
+    image_data = tf.keras.utils.image_dataset_from_directory(directory, label_mode='categorical', batch_size=bathsize, image_size=(image_WH, image_WH)) #creating tensor data from images
     image_classes = image_data.class_names
-
     data_iterator = image_data.as_numpy_iterator()
     batch = data_iterator.next() #creating bath tensor
-    image_data = image_data.map(lambda x,y: (x/256, y)) #optimising tensor from 0 -> 256? to 0 -> 1
+    image_data = image_data.map(lambda x,y: (x/image_WH, y)) #optimising tensor from 0 -> image_WH? to 0 -> 1
     image_data.as_numpy_iterator().next() #moving to other bath tensor
 
     ##creating numbers of data baths for training, validation, testing
@@ -137,7 +138,7 @@ def train_N_test_model(epocs_num):
     test = image_data.skip(train_data_size+val_data_size).take(test_data_size)
     print(f'Test data len {len(test)}, train data len {len(train)}, val data len {len(val)}')
 
-    model = model_design(256, 256) #initialising model for training
+    model = model_design(image_WH, image_WH) #initialising model for training
     opt = SGD(lr=0.001, momentum=0.9) #optimising with stochastic gradient descent
 
     model.compile(optimizer=opt, loss='categorical_crossentropy', metrics=['accuracy']) #compiling model with categorical crossentropy loss function and metering accuracy
@@ -154,7 +155,7 @@ def train_N_test_model(epocs_num):
     ##important graphs
     fig = plt.figure()
     plt.plot(hist.history['loss'], color='teal', label='loss')
-    plt.plot(hist.history['val_loss'], color='orange', label='val_loss')
+    plt.plot(hist.history['val_loss'], color='orange', label='')
     fig.suptitle('Loss', fontsize=20)
     plt.legend(loc="upper left")
     plt.show()
@@ -198,8 +199,8 @@ def test_model(model, image_classes, image_path):
     plt.show()
 
     #resizing 2 fit into algorithm
-    resize = tf.image.resize(img, (256,256))
-    yhat = model.predict(np.expand_dims(resize/256, 0))
+    resize = tf.image.resize(img, (image_WH, image_WH))
+    yhat = model.predict(np.expand_dims(resize/image_WH, 0))
     max_yhat = yhat.argmax(axis=1)
     pred_class = image_classes[int(max_yhat) - 1]
     
@@ -235,11 +236,13 @@ def using_model():
             break
         model = _load_model(model_name)
         class_names = class_from_file(model_name)
-
-        print('input picture path:')
-        image_path = input()
-
-        print(test_model(model, class_names, image_path))
+        while True:
+            print('input picture path:')
+            image_path = input()
+            if image_path == 'exit':
+                break
+            else:
+                print(test_model(model, class_names, image_path))
 
 
 while True:
