@@ -1,8 +1,5 @@
 ﻿print('loading APIs')
 
-from asyncio.windows_events import NULL
-from email.mime import image
-from shutil import ExecError
 import tensorflow as tf
 import os
 import cv2
@@ -15,15 +12,10 @@ from tensorflow.keras.models import load_model
 from matplotlib import pyplot as plt
 
 print('loaded :)')
-directory = 'test_data' ##directory for data
-image_WH = 256
-bathsize = 10
-##in case of gpu limit memory causing OOM exeption
-gpus = tf.config.experimental.list_physical_devices('GPU')
-for gpu in gpus: 
-    tf.config.experimental.set_memory_growth(gpu, True)
-print(f'found {len(gpus)} GPUs: {gpus}')
 
+directory = 'Planes' ##directory for data
+image_WH = 500 #image width and higth
+bathsize = 8 #bath size workload
 
 #this function creates a file of hist with defined name
 def file_4_classes(classes, name):
@@ -67,95 +59,74 @@ def remove_unexistant_images(_dir):
 #count classes(folders) in directory
 def count_classes(_dir):
     return int(len(os.listdir(_dir)))
+def pc_delete_model(name='tmp'):
+    os.remove(os.path.join('models', name + '_classes' + '.txt'))
+    os.remove(os.path.join('models',f'{name}.h5'))
 
-#save model
-def _save_model(model, image_classes):
+#save model automaticcaly
+def pc_save_model(model, image_classes, name='tmp'):
+    file_4_classes(image_classes, name)
+    model.save(os.path.join('models',f'{name}.h5'))
+
+#save model with input
+def user_save_model(model, image_classes, name=1):
     print(f'save_this_model?')
     ans = input()
     if ans == "y" or ans == 'Y':
         print('Enter name of model')
         name = input()
-        file_4_classes(image_classes, name)
-        model.save(os.path.join('models',f'{name}.h5'))
+        pc_save_model(model, image_classes, name)
+        pc_delete_model()
         print("model saved")
     else:
-        print('model scraped :c')
+        print('Model saved for later use: tmp.h5')
 
 ##architecture of our model
 def model_design(image_h, image_w):
     model = Sequential() #CNN model
+    activation = 'sigmoid'
+    final_layers = count_classes(directory)
+    #modeling CNN // modification from VGG model with 3 blocks + dropout + batch normalization
 
-    #modeling CNN // modification from VGG-16
-
-    model.add(Conv2D(32, (3, 3), activation='relu', kernel_initializer='he_uniform', padding='same', input_shape=(image_h, image_w, 3)))
+    model.add(Conv2D(32, 3, activation=activation, padding='same', kernel_initializer = 'he_uniform',input_shape=(image_h, image_w, 3)))
     model.add(BatchNormalization())
 
-    model.add(Conv2D(32, (3, 3), activation='relu', kernel_initializer='he_uniform', padding='same'))
-    model.add(MaxPooling2D((2, 2)))
+    model.add(Conv2D(32, 3, activation = activation, padding = 'same', kernel_initializer = 'he_uniform'))
+    model.add(BatchNormalization())
+    model.add(MaxPooling2D())
 
-    model.add(Conv2D(64, (3, 3), activation='relu', kernel_initializer='he_uniform', padding='same'))
+    model.add(Conv2D(64, 3, activation = activation, padding = 'same', kernel_initializer = 'he_uniform'))
     model.add(BatchNormalization())
 
-    model.add(Conv2D(64, (3, 3), activation='relu', kernel_initializer='he_uniform', padding='same'))
-    model.add(BatchNormalization())
-    model.add(MaxPooling2D((2, 2)))
-
-    model.add(Conv2D(128, (3, 3), activation='relu', kernel_initializer='he_uniform', padding='same'))
-    model.add(BatchNormalization())
-
-    model.add(Conv2D(128, (3, 3), activation='relu', kernel_initializer='he_uniform', padding='same'))
-    model.add(BatchNormalization())
-    model.add(MaxPooling2D((2, 2)))
+    model.add(Conv2D(64, 3, activation = activation, padding = 'same', kernel_initializer = 'he_uniform'))
+    model.add(BatchNormalization()) 
+    model.add(MaxPooling2D())
 
     model.add(Flatten())
 
-    model.add(Dense(128, activation='sigmoid', kernel_initializer='he_uniform'))
-    model.add(BatchNormalization())
+    # fully connected layers
+    model.add(Dense(128, activation=activation,  kernel_initializer = 'he_uniform'))
+    model.add(Dropout(0.05))
+    model.add(Dense(64, activation=activation,  kernel_initializer = 'he_uniform'))
+    model.add(Dropout(0.05))
 
-    model.add(Dense(count_classes(directory), activation='softmax'))
+    # final layer
     
+    model.add(Dense(final_layers, activation='softmax'))
+
+    # compiling model
+    model.compile(loss='kullback_leibler_divergence', optimizer=SGD(lr=0.001, momentum=0.9), metrics=['accuracy'])
+
+    model.summary() #model info
 
     return model
 
-##train and test trained model
-def train_N_test_model(epocs_num):
+##important graphs
+def hist_graph(hist):
 
-    image_data = tf.keras.utils.image_dataset_from_directory(directory, label_mode='categorical', batch_size=bathsize, image_size=(image_WH, image_WH)) #creating tensor data from images
-    image_classes = image_data.class_names
-    data_iterator = image_data.as_numpy_iterator()
-    batch = data_iterator.next() #creating bath tensor
-    image_data = image_data.map(lambda x,y: (x/image_WH, y)) #optimising tensor from 0 -> image_WH? to 0 -> 1
-    image_data.as_numpy_iterator().next() #moving to other bath tensor
-
-    ##creating numbers of data baths for training, validation, testing
-    train_data_size = int(len(image_data)*.7)
-    val_data_size = int(len(image_data)*.2)
-    test_data_size = int(len(image_data)*.1) + 1
-
-    ##taking images for training, validation and testing
-    train = image_data.take(train_data_size)
-    val = image_data.skip(train_data_size).take(val_data_size)
-    test = image_data.skip(train_data_size+val_data_size).take(test_data_size)
-    print(f'Test data len {len(test)}, train data len {len(train)}, val data len {len(val)}')
-
-    model = model_design(image_WH, image_WH) #initialising model for training
-    opt = SGD(lr=0.001, momentum=0.9) #optimising with stochastic gradient descent
-
-    model.compile(optimizer=opt, loss='categorical_crossentropy', metrics=['accuracy']) #compiling model with categorical crossentropy loss function and metering accuracy
-    model.summary() #model info
-    print('awaiting for creating log...')
-    #creating log (never used)
-    logdir='log'
-    tensor_callback = tf.keras.callbacks.TensorBoard(log_dir=logdir)
-    print('log created \n awaiting for GYM opening')
-
-    hist = model.fit(train, epochs=epocs_num, validation_data=val, callbacks=[tensor_callback]) ##Gym for  model
-
-
-    ##important graphs
     fig = plt.figure()
     plt.plot(hist.history['loss'], color='teal', label='loss')
-    plt.plot(hist.history['val_loss'], color='orange', label='')
+    plt.plot(hist.history['val_loss'], color='orange', label='val_loss')
     fig.suptitle('Loss', fontsize=20)
     plt.legend(loc="upper left")
     plt.show()
@@ -167,36 +138,84 @@ def train_N_test_model(epocs_num):
     plt.legend(loc="upper left")
     plt.show()
 
-    #evaluate presition, recall and accuacy
+#evaluate presition, recall and accuacy
+def presison_accuracy_recall(model, test_data):
     from tensorflow.keras.metrics import Precision, Recall, BinaryAccuracy
 
     pre = Precision()
     re = Recall()
     acc = BinaryAccuracy()
 
-    for batch in test.as_numpy_iterator(): 
+    for batch in test_data.as_numpy_iterator(): 
         X, y = batch
         yhat = model.predict(X)
         pre.update_state(y, yhat)
         re.update_state(y, yhat)
         acc.update_state(y, yhat)
-    print(f"presition: {pre.result().numpy()}, recall: { re.result().numpy()},accuracy: {acc.result().numpy()}")
-    
-    image_path='229280_800.jpg'
-    print(f'prediction: {test_model(model, image_classes, image_path)}')
+    print(f"Model tested. presition: {pre.result().numpy()}, recall: { re.result().numpy()}, accuracy: {acc.result().numpy()}")
 
-    _save_model(model, image_classes)
+##train and test trained model
+def train_N_test_model(epocs_num):
+
+    image_data = tf.keras.utils.image_dataset_from_directory(directory, label_mode='categorical', batch_size=bathsize, image_size=(image_WH, image_WH)) #creating tensor data from images
+    image_classes = image_data.class_names
+    data_iterator = image_data.as_numpy_iterator()
+    batch = data_iterator.next() #creating bath tensor
+    #plt.figure(figsize=(10, 10))
+
+    #fig, ax = plt.subplots(ncols=4, figsize=(20,20))
+    #for idx, img in enumerate(batch[0][:4]):
+    #    ax[idx].imshow(img.astype(int))
+    #    ax[idx].title.set_text(batch[1][idx])
+    #plt.show()
+
+    image_data = image_data.map(lambda x,y: (x/image_WH, y)) #optimising tensor from 0 -> image_WH? to 0 -> 1
+    image_data.as_numpy_iterator().next() #moving to other bath tensor
+
+    ##creating numbers of data baths for training, validation, testing
+    train_data_size = int(len(image_data)*.65)
+    val_data_size = int(len(image_data)*.2) 
+    test_data_size = int(len(image_data)*.15) 
+
+    ##taking images for training, validation and testing
+    train = image_data.take(train_data_size)
+    val = image_data.skip(train_data_size).take(val_data_size)
+    test = image_data.skip(train_data_size+val_data_size).take(test_data_size)
+    print(f'Test data len {len(test)}, train data len {len(train)}, val data len {len(val)}')
+
+    model = model_design(image_WH, image_WH) #initialising model for training
+    
+
+    print('awaiting for creating log...')
+    #creating log (never used)
+    tensor_callback = tf.keras.callbacks.TensorBoard(log_dir='log')
+    es = tf.keras.callbacks.EarlyStopping(monitor='val_loss', patience=50)
+    print('log created \nawaiting for GYM opening')
+
+    hist = model.fit(train, epochs=epocs_num, validation_data=val, callbacks=[tensor_callback, es]) ##Gym for  model
+    
+
+    pc_save_model(model, image_classes)
+
+    hist_graph(hist)
+
+    presison_accuracy_recall(model, test)
+    
+    user_save_model(model, image_classes)
+    
+    #image_path='229280_800.jpg'
+    #print(f'prediction: {test_model(model, image_classes, image_path)}')
 
 
 #testing with unknown for CNN picture
 def test_model(model, image_classes, image_path):
     try:
         img = cv2.imread(image_path)
+        plt.imshow(img)
+        plt.show()
     except:
-        print('issue with image')
-        return 1
-    plt.imshow(img)
-    plt.show()
+        return 'issue with image'
+    
 
     #resizing 2 fit into algorithm
     resize = tf.image.resize(img, (image_WH, image_WH))
@@ -215,6 +234,7 @@ def _load_model(model_name):
         ans = input()
         if ans == 'y' or ans == 'Y':
             train_N_test_model(try_to_int_ans())
+        return False
   
             
 #try to take int value
@@ -236,14 +256,22 @@ def using_model():
             break
         model = _load_model(model_name)
         class_names = class_from_file(model_name)
-        while True:
+        while model != False:
             print('input picture path:')
             image_path = input()
+            
             if image_path == 'exit':
                 break
             else:
                 print(test_model(model, class_names, image_path))
 
+
+
+##in case of gpu limit memory causing OOM exeption
+gpus = tf.config.experimental.list_physical_devices('GPU')
+for gpu in gpus: 
+    tf.config.experimental.set_memory_growth(gpu, True)
+print(f'found {len(gpus)} GPUs: {gpus}')
 
 while True:
     print('command: train or open model?')
