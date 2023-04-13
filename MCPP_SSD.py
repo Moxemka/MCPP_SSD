@@ -4,8 +4,9 @@ import tensorflow as tf
 import os
 import cv2
 import numpy as np
+import warnings
 from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Conv2D, MaxPooling2D, Dense, Flatten, Dropout
+from tensorflow.keras import layers
 from tensorflow.keras.layers import BatchNormalization
 from tensorflow.keras.optimizers import SGD
 from tensorflow.keras.models import load_model
@@ -13,9 +14,14 @@ from matplotlib import pyplot as plt
 
 print('loaded :)')
 
-directory = 'Planes' ##directory for data
-image_WH = 500 #image width and higth
-bathsize = 8 #bath size workload
+warnings.filterwarnings("ignore", category=FutureWarning)
+
+train_directory = 'train' ##directory for train data
+test_directory = 'test' ##directory for test data
+image_WH = 244 #image width and height
+bathsize = 32 #bath size workload
+
+
 
 #this function creates a file of hist with defined name
 def file_4_classes(classes, name):
@@ -59,6 +65,7 @@ def remove_unexistant_images(_dir):
 #count classes(folders) in directory
 def count_classes(_dir):
     return int(len(os.listdir(_dir)))
+
 def pc_delete_model(name='tmp'):
     os.remove(os.path.join('models', name + '_classes' + '.txt'))
     os.remove(os.path.join('models',f'{name}.h5'))
@@ -81,45 +88,7 @@ def user_save_model(model, image_classes, name=1):
     else:
         print('Model saved for later use: tmp.h5')
 
-##architecture of our model
-def model_design(image_h, image_w):
-    model = Sequential() #CNN model
-    activation = 'sigmoid'
-    final_layers = count_classes(directory)
-    #modeling CNN // modification from VGG model with 3 blocks + dropout + batch normalization
 
-    model.add(Conv2D(32, 3, activation=activation, padding='same', kernel_initializer = 'he_uniform',input_shape=(image_h, image_w, 3)))
-    model.add(BatchNormalization())
-
-    model.add(Conv2D(32, 3, activation = activation, padding = 'same', kernel_initializer = 'he_uniform'))
-    model.add(BatchNormalization())
-    model.add(MaxPooling2D())
-
-    model.add(Conv2D(64, 3, activation = activation, padding = 'same', kernel_initializer = 'he_uniform'))
-    model.add(BatchNormalization())
-
-    model.add(Conv2D(64, 3, activation = activation, padding = 'same', kernel_initializer = 'he_uniform'))
-    model.add(BatchNormalization()) 
-    model.add(MaxPooling2D())
-
-    model.add(Flatten())
-
-    # fully connected layers
-    model.add(Dense(128, activation=activation,  kernel_initializer = 'he_uniform'))
-    model.add(Dropout(0.05))
-    model.add(Dense(64, activation=activation,  kernel_initializer = 'he_uniform'))
-    model.add(Dropout(0.05))
-
-    # final layer
-    
-    model.add(Dense(final_layers, activation='softmax'))
-
-    # compiling model
-    model.compile(loss='kullback_leibler_divergence', optimizer=SGD(lr=0.001, momentum=0.9), metrics=['accuracy'])
-
-    model.summary() #model info
-
-    return model
 
 ##important graphs
 def hist_graph(hist):
@@ -140,11 +109,11 @@ def hist_graph(hist):
 
 #evaluate presition, recall and accuacy
 def presison_accuracy_recall(model, test_data):
-    from tensorflow.keras.metrics import Precision, Recall, BinaryAccuracy
+    from tensorflow.keras.metrics import Precision, Recall, CategoricalAccuracy
 
     pre = Precision()
     re = Recall()
-    acc = BinaryAccuracy()
+    acc = CategoricalAccuracy()
 
     for batch in test_data.as_numpy_iterator(): 
         X, y = batch
@@ -154,34 +123,79 @@ def presison_accuracy_recall(model, test_data):
         acc.update_state(y, yhat)
     print(f"Model tested. presition: {pre.result().numpy()}, recall: { re.result().numpy()}, accuracy: {acc.result().numpy()}")
 
+##architecture of our model
+def model_design(img_height, img_width):
+    n_classes = count_classes(train_directory)
+
+    conv_base  = tf.keras.applications.DenseNet201(include_top=False, weights="imagenet", input_shape=(img_height, img_width, 3))
+    for layer in conv_base.layers:
+        layer.trainable = False
+    
+    top_model = layers.Flatten()(conv_base.output)
+    top_model = layers.Dense(n_classes * 2, activation='sigmoid')(top_model)
+    top_model = layers.Dropout(0.25)(top_model)
+    output_layer = layers.Dense(n_classes, activation='softmax')(top_model)
+
+    model = tf.keras.models.Model(inputs=conv_base.input, outputs=output_layer)
+  
+
+    model.summary()
+    opt = tf.keras.optimizers.Adam(learning_rate=0.0001)
+    model.compile(loss='categorical_crossentropy', optimizer=opt, metrics=['accuracy', tf.keras.metrics.Precision(), tf.keras.metrics.Recall()])
+
+    
+    return model
+
+
 ##train and test trained model
 def train_N_test_model(epocs_num):
 
-    image_data = tf.keras.utils.image_dataset_from_directory(directory, label_mode='categorical', batch_size=bathsize, image_size=(image_WH, image_WH)) #creating tensor data from images
-    image_classes = image_data.class_names
-    data_iterator = image_data.as_numpy_iterator()
-    batch = data_iterator.next() #creating bath tensor
-    #plt.figure(figsize=(10, 10))
+    #_train_ds = tf.keras.utils.image_dataset_from_directory(train_directory, validation_split=0.2, subset="training", label_mode='categorical', seed=123, image_size=(image_WH, image_WH), batch_size=bathsize)
+    #val_ds = tf.keras.utils.image_dataset_from_directory(train_directory, validation_split=0.2, subset="validation", label_mode='categorical', seed=123, image_size=(image_WH, image_WH), batch_size=bathsize)
+    test_ds = tf.keras.utils.image_dataset_from_directory(test_directory, seed=123, image_size=(image_WH, image_WH), label_mode='categorical', batch_size=bathsize)
+    
 
-    #fig, ax = plt.subplots(ncols=4, figsize=(20,20))
-    #for idx, img in enumerate(batch[0][:4]):
-    #    ax[idx].imshow(img.astype(int))
-    #    ax[idx].title.set_text(batch[1][idx])
-    #plt.show()
+    train_datagen = tf.keras.preprocessing.image.ImageDataGenerator(
+        rescale=1./255,
+        rotation_range=20,
+        width_shift_range=0.2,
+        height_shift_range=0.2,
+        shear_range=0.2,
+        zoom_range=0.2,
+        horizontal_flip=True,
+        validation_split=0.3
+    )
 
-    image_data = image_data.map(lambda x,y: (x/image_WH, y)) #optimising tensor from 0 -> image_WH? to 0 -> 1
-    image_data.as_numpy_iterator().next() #moving to other bath tensor
+    train_ds = train_datagen.flow_from_directory(
+        train_directory,
+        batch_size=bathsize,
+        seed=123,
+        target_size =(image_WH, image_WH),
+        class_mode='categorical',
+        subset='training'
+    )
 
-    ##creating numbers of data baths for training, validation, testing
-    train_data_size = int(len(image_data)*.65)
-    val_data_size = int(len(image_data)*.2) 
-    test_data_size = int(len(image_data)*.15) 
+    image_classes = list(train_ds.class_indices.keys())
 
-    ##taking images for training, validation and testing
-    train = image_data.take(train_data_size)
-    val = image_data.skip(train_data_size).take(val_data_size)
-    test = image_data.skip(train_data_size+val_data_size).take(test_data_size)
-    print(f'Test data len {len(test)}, train data len {len(train)}, val data len {len(val)}')
+    val_datagen = tf.keras.preprocessing.image.ImageDataGenerator(rescale=1./255, validation_split=0.2)
+    val_ds = val_datagen.flow_from_directory(
+        train_directory,
+        batch_size=bathsize,
+        seed=123,
+        target_size =(image_WH, image_WH),
+        class_mode='categorical',
+        subset='validation'
+
+    )
+    test_datagen = tf.keras.preprocessing.image.ImageDataGenerator(rescale=1./255)
+    test_ds = test_datagen.flow_from_directory(
+        test_directory,
+        batch_size=bathsize,
+        seed=123,
+        target_size=(image_WH, image_WH),
+        class_mode='categorical'
+    ) 
+    
 
     model = model_design(image_WH, image_WH) #initialising model for training
     
@@ -189,18 +203,24 @@ def train_N_test_model(epocs_num):
     print('awaiting for creating log...')
     #creating log (never used)
     tensor_callback = tf.keras.callbacks.TensorBoard(log_dir='log')
-    es = tf.keras.callbacks.EarlyStopping(monitor='val_loss', patience=50)
+
+    #callback for early stopping
+    es = tf.keras.callbacks.EarlyStopping(monitor='val_loss', patience=10)
     print('log created \nawaiting for GYM opening')
 
-    hist = model.fit(train, epochs=epocs_num, validation_data=val, callbacks=[tensor_callback, es]) ##Gym for  model
+    hist = model.fit(train_ds, epochs=epocs_num, steps_per_epoch = train_ds.samples // bathsize, validation_data=val_ds, validation_steps = val_ds.samples // bathsize, callbacks=[tensor_callback, es]) ##Gym for  model
+    
     
 
     pc_save_model(model, image_classes)
 
     hist_graph(hist)
 
-    presison_accuracy_recall(model, test)
-    
+    #presison_accuracy_recall(model, test_ds)
+    loss, accuracy, precision, recall = model.evaluate(test_ds)
+    print('Test accuracy:', accuracy)
+    print('Test precision:', precision)
+    print('Test recall:', recall)
     user_save_model(model, image_classes)
     
     #image_path='229280_800.jpg'
