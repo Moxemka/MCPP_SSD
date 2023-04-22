@@ -1,14 +1,13 @@
 ﻿print('loading APIs')
 
+from random import shuffle
 import tensorflow as tf
 import os
 import cv2
 import numpy as np
 import warnings
-from tensorflow.keras.models import Sequential
+import PIL
 from tensorflow.keras import layers
-from tensorflow.keras.layers import BatchNormalization
-from tensorflow.keras.optimizers import SGD
 from tensorflow.keras.models import load_model
 from matplotlib import pyplot as plt
 
@@ -18,9 +17,9 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 
 train_directory = 'train' ##directory for train data
 test_directory = 'test' ##directory for test data
-image_WH = 244 #image width and height
-bathsize = 32 #bath size workload
-
+image_WH = 227 #image width and height
+bathsize = 16 #bath size workload
+steps_per_epoch = 100
 
 
 #this function creates a file of hist with defined name
@@ -101,8 +100,8 @@ def hist_graph(hist):
     plt.show()
 
     fig = plt.figure()
-    plt.plot(hist.history['accuracy'], color='teal', label='accuracy')
-    plt.plot(hist.history['val_accuracy'], color='orange', label='val_accuracy')
+    plt.plot(hist.history['categorical_accuracy'], color='teal', label='accuracy')
+    plt.plot(hist.history['val_categorical_accuracy'], color='orange', label='val_accuracy')
     fig.suptitle('Accuracy', fontsize=20)
     plt.legend(loc="upper left")
     plt.show()
@@ -127,21 +126,27 @@ def presison_accuracy_recall(model, test_data):
 def model_design(img_height, img_width):
     n_classes = count_classes(train_directory)
 
-    conv_base  = tf.keras.applications.DenseNet201(include_top=False, weights="imagenet", input_shape=(img_height, img_width, 3))
+    conv_base  = tf.keras.applications.ResNet101V2(include_top=False, 
+                                                   weights="imagenet", 
+                                                   input_shape=(img_height, img_width, 3))
+
+    
     for layer in conv_base.layers:
         layer.trainable = False
-    
-    top_model = layers.Flatten()(conv_base.output)
-    top_model = layers.Dense(n_classes * 2, activation='sigmoid')(top_model)
-    top_model = layers.Dropout(0.25)(top_model)
-    output_layer = layers.Dense(n_classes, activation='softmax')(top_model)
+
+    top_model = layers.GlobalAveragePooling2D(name='add_11')(conv_base.output)
+    top_model = layers.Dropout(0.3, name='add_111')(top_model)
+    top_model = layers.Dense(1024, name='add_121', activation='relu')(top_model)
+    output_layer = layers.Dense(n_classes, activation='softmax', name='add_14')(top_model)
 
     model = tf.keras.models.Model(inputs=conv_base.input, outputs=output_layer)
   
 
-    model.summary()
-    opt = tf.keras.optimizers.Adam(learning_rate=0.0001)
-    model.compile(loss='categorical_crossentropy', optimizer=opt, metrics=['accuracy', tf.keras.metrics.Precision(), tf.keras.metrics.Recall()])
+    #model.summary()
+    opt = tf.keras.optimizers.Adam(learning_rate=1e-3)
+    model.compile(loss='categorical_crossentropy', 
+                  optimizer=opt, 
+                  metrics=['categorical_accuracy'])
 
     
     return model
@@ -157,19 +162,18 @@ def train_N_test_model(epocs_num):
 
     train_datagen = tf.keras.preprocessing.image.ImageDataGenerator(
         rescale=1./255,
-        rotation_range=20,
-        width_shift_range=0.2,
-        height_shift_range=0.2,
-        shear_range=0.2,
-        zoom_range=0.2,
-        horizontal_flip=True,
-        validation_split=0.3
+        #rotation_range=90,
+        ##zoom_range=[0.1, 0.9],
+        #horizontal_flip=True,
+        ##vertical_flip=True,
+        validation_split=0.2
     )
 
     train_ds = train_datagen.flow_from_directory(
         train_directory,
         batch_size=bathsize,
         seed=123,
+        shuffle=True,
         target_size =(image_WH, image_WH),
         class_mode='categorical',
         subset='training'
@@ -181,7 +185,7 @@ def train_N_test_model(epocs_num):
     val_ds = val_datagen.flow_from_directory(
         train_directory,
         batch_size=bathsize,
-        seed=123,
+        shuffle=False,
         target_size =(image_WH, image_WH),
         class_mode='categorical',
         subset='validation'
@@ -196,36 +200,75 @@ def train_N_test_model(epocs_num):
         class_mode='categorical'
     ) 
     
-
+    
     model = model_design(image_WH, image_WH) #initialising model for training
     
+    for layer in model.layers:
+        print("{0}:\t{1}".format(layer.trainable, layer.name))
 
-    print('awaiting for creating log...')
-    #creating log (never used)
     tensor_callback = tf.keras.callbacks.TensorBoard(log_dir='log')
-
     #callback for early stopping
-    es = tf.keras.callbacks.EarlyStopping(monitor='val_loss', patience=10)
-    print('log created \nawaiting for GYM opening')
+    es = tf.keras.callbacks.EarlyStopping(monitor='val_loss', patience=5)
+    cp = tf.keras.callbacks.ModelCheckpoint(monitor='val_categorical_accuracy', mode='max', save_best_only=True, filepath=os.path.join('models',f'_best.h5'))
+    print('\nawaiting for GYM opening')
 
-    hist = model.fit(train_ds, epochs=epocs_num, steps_per_epoch = train_ds.samples // bathsize, validation_data=val_ds, validation_steps = val_ds.samples // bathsize, callbacks=[tensor_callback, es]) ##Gym for  model
+    hist = model.fit(train_ds, 
+                     epochs=epocs_num, 
+                     steps_per_epoch = train_ds.samples // bathsize, 
+                     validation_data=val_ds, validation_steps = val_ds.samples // bathsize, 
+                     callbacks=[tensor_callback, es, cp]
+                     ) ##Gym for  model
     
+    #pc_save_model(model, image_classes)
+
+    best_model = _load_model('_best')
+    best_model.trainable = True ##поставить на ночь
+    train_ds.reset()
+    val_ds.reset()
+
+    #for layer in best_model.layers:
+    #    # Boolean whether this layer is trainable.
+    #    trainable = ('block' in layer.name
+    #                 or 'bn' in layer.name
+    #                 or 'relu' in layer.name
+    #                 or 'input' in layer.name
+    #                 or 'pad' in layer.name
+    #                 or 'conv' in layer.name
+    #                 or 'pool' in layer.name
+    #                 or 'max' in layer.name)
+    
+    #    # Set the layer's bool.
+    #    layer.trainable = trainable
+
+    for layer in best_model.layers:
+        print("{0}:\t{1}".format(layer.trainable, layer.name))
+
+    opt = tf.keras.optimizers.Adam(learning_rate=1e-5)
+    best_model.compile(loss='categorical_crossentropy', 
+                  optimizer=opt, 
+                  metrics=['categorical_accuracy'])
     
 
-    pc_save_model(model, image_classes)
+    hist = best_model.fit(train_ds, 
+                     epochs=epocs_num // 2, 
+                     steps_per_epoch = train_ds.samples // bathsize, 
+                     validation_data=val_ds, validation_steps = val_ds.samples // bathsize, 
+                     callbacks=[tensor_callback, es, cp]
+                     ) ##Finetuning the model
+
+    
+    pc_save_model(best_model, image_classes)
 
     hist_graph(hist)
 
     #presison_accuracy_recall(model, test_ds)
-    loss, accuracy, precision, recall = model.evaluate(test_ds)
-    print('Test accuracy:', accuracy)
-    print('Test precision:', precision)
-    print('Test recall:', recall)
-    user_save_model(model, image_classes)
+    result = best_model.evaluate(test_ds)
+    print(f"Test-set classification accuracy: {result[1]}")
+
+    user_save_model(best_model, image_classes)
     
     #image_path='229280_800.jpg'
     #print(f'prediction: {test_model(model, image_classes, image_path)}')
-
 
 #testing with unknown for CNN picture
 def test_model(model, image_classes, image_path):
@@ -236,14 +279,15 @@ def test_model(model, image_classes, image_path):
     except:
         return 'issue with image'
     
-
+    
     #resizing 2 fit into algorithm
     resize = tf.image.resize(img, (image_WH, image_WH))
     yhat = model.predict(np.expand_dims(resize/image_WH, 0))
     max_yhat = yhat.argmax(axis=1)
-    pred_class = image_classes[int(max_yhat) - 1]
+    pred_class = f'this is {image_classes[int(max_yhat)]} with score {yhat[0, int(max_yhat)] * 100}%' 
     
     return pred_class
+
 
 #load model from directory
 def _load_model(model_name):
