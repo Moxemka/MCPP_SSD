@@ -1,26 +1,23 @@
 ﻿print('loading APIs')
 
-from random import shuffle
 import tensorflow as tf
 import os
 import cv2
 import numpy as np
-import warnings
 import PIL
+from PIL import Image
 from tensorflow.keras import layers
 from tensorflow.keras.models import load_model
 from matplotlib import pyplot as plt
 
 print('loaded :)')
 
-warnings.filterwarnings("ignore", category=FutureWarning)
 
-train_directory = 'train' ##directory for train data
-test_directory = 'test' ##directory for test data
-image_WH = 227 #image width and height
-bathsize = 16 #bath size workload
+train_directory = 'planes_new_train' ##directory for train data
+test_directory = 'planes_new_test - Copy' ##directory for train data
+image_WH = 299 #image width and height
+bathsize = 10 #bath size workload
 steps_per_epoch = 100
-
 
 #this function creates a file of hist with defined name
 def file_4_classes(classes, name):
@@ -44,22 +41,26 @@ def class_from_file(name):
     return hist
 
 ##scan directory for images
-def remove_unexistant_images(_dir):
-    data_dir = _dir
-    image_exts = ['jpeg', 'jpg', 'bmp', 'png']
-    classes = 0
-    for image_class in os.listdir(data_dir):
-        for image in os.listdir(os.path.join(data_dir, image_class)):
-            image_path = os.path.join(data_dir, image_class, image) #creating image path
-            try: #trying to open image
-                img = cv2.imread(image_path) 
-                extention = imghdr.what(image_path)
-                if extention not in image_exts: 
-                    print(f'Image not in ext list {format(image_path)}')
-                    os.remove(image_path)
-            except: 
-                print(f'Issue with image {format(image_path)}')
-                #os.remove(image_path)
+def restruct_unexistant_images(path):
+    quality = 90
+    extension = '.jpeg'
+    for root, dirs, files in os.walk(path):
+        for file in files:
+            # extention of file
+            ext = os.path.splitext(file)[1]
+
+            # Ext is jpg or JPEG
+            # Проверяем, что расширение файла не является jpg или jpeg
+            if ext.lower() != '.jpeg' or ext.lower() != '.jpg':
+                img_path = os.path.join(root, file)
+
+                # oppening file with Pillow and saving it in JPEG format
+                try:
+                    img = Image.open(img_path)
+                    img.save(os.path.splitext(img_path)[0] + extension, 'JPEG', quality=quality)
+                    print(os.path.join(root, file), 'has been converted to JPEG')
+                except IOError:
+                    print(os.path.join(root, file), 'cannot be converted')
 
 #count classes(folders) in directory
 def count_classes(_dir):
@@ -114,9 +115,9 @@ def presison_accuracy_recall(model, test_data):
     re = Recall()
     acc = CategoricalAccuracy()
 
-    for batch in test_data.as_numpy_iterator(): 
+    for batch in test_data: 
         X, y = batch
-        yhat = model.predict(X)
+        yhat = model.predict(X, verbose=1)
         pre.update_state(y, yhat)
         re.update_state(y, yhat)
         acc.update_state(y, yhat)
@@ -126,7 +127,7 @@ def presison_accuracy_recall(model, test_data):
 def model_design(img_height, img_width):
     n_classes = count_classes(train_directory)
 
-    conv_base  = tf.keras.applications.ResNet101V2(include_top=False, 
+    conv_base  = tf.keras.applications.DenceNet201(include_top=False, 
                                                    weights="imagenet", 
                                                    input_shape=(img_height, img_width, 3))
 
@@ -134,38 +135,42 @@ def model_design(img_height, img_width):
     for layer in conv_base.layers:
         layer.trainable = False
 
-    top_model = layers.GlobalAveragePooling2D(name='add_11')(conv_base.output)
-    top_model = layers.Dropout(0.3, name='add_111')(top_model)
-    top_model = layers.Dense(1024, name='add_121', activation='relu')(top_model)
-    output_layer = layers.Dense(n_classes, activation='softmax', name='add_14')(top_model)
+    top_model = layers.GlobalAveragePooling2D()(conv_base.output)
+    
+    top_model = layers.Dense(1024, activation='relu')(top_model)
+    top_model = layers.BatchNormalization()(top_model)
+    top_model = layers.Dropout(0.5)(top_model)
+
+    top_model = layers.Dense(512, activation='relu')(top_model)
+    top_model = layers.BatchNormalization()(top_model)
+    top_model = layers.Dropout(0.5)(top_model)
+
+    output_layer = layers.Dense(n_classes, activation='softmax')(top_model)
 
     model = tf.keras.models.Model(inputs=conv_base.input, outputs=output_layer)
   
 
-    #model.summary()
-    opt = tf.keras.optimizers.Adam(learning_rate=1e-3)
-    model.compile(loss='categorical_crossentropy', 
-                  optimizer=opt, 
-                  metrics=['categorical_accuracy'])
-
+    model.summary()
     
     return model
 
+def freeze_base_layers(model, frozen_per_layers=1.0):
+    base_layers_count = len(model.layers)
+    fine_tune_at = int(base_layers_count*frozen_per_layers)
+    for layer in model.layers[:fine_tune_at]:
+        layer.trainable = False
+    print('Frozen {} lyers out of {} \n'.format(fine_tune_at, base_layers_count))
+    return model
 
 ##train and test trained model
 def train_N_test_model(epocs_num):
-
-    #_train_ds = tf.keras.utils.image_dataset_from_directory(train_directory, validation_split=0.2, subset="training", label_mode='categorical', seed=123, image_size=(image_WH, image_WH), batch_size=bathsize)
-    #val_ds = tf.keras.utils.image_dataset_from_directory(train_directory, validation_split=0.2, subset="validation", label_mode='categorical', seed=123, image_size=(image_WH, image_WH), batch_size=bathsize)
-    test_ds = tf.keras.utils.image_dataset_from_directory(test_directory, seed=123, image_size=(image_WH, image_WH), label_mode='categorical', batch_size=bathsize)
     
 
     train_datagen = tf.keras.preprocessing.image.ImageDataGenerator(
         rescale=1./255,
-        #rotation_range=90,
-        ##zoom_range=[0.1, 0.9],
-        #horizontal_flip=True,
-        ##vertical_flip=True,
+        rotation_range = 20,
+        brightness_range=[0.5, 1.5],
+        horizontal_flip = True,
         validation_split=0.2
     )
 
@@ -186,7 +191,7 @@ def train_N_test_model(epocs_num):
         train_directory,
         batch_size=bathsize,
         shuffle=False,
-        target_size =(image_WH, image_WH),
+        target_size = (image_WH, image_WH),
         class_mode='categorical',
         subset='validation'
 
@@ -200,75 +205,115 @@ def train_N_test_model(epocs_num):
         class_mode='categorical'
     ) 
     
-    
-    model = model_design(image_WH, image_WH) #initialising model for training
-    
-    for layer in model.layers:
-        print("{0}:\t{1}".format(layer.trainable, layer.name))
+    #___________________________stage_1
 
-    tensor_callback = tf.keras.callbacks.TensorBoard(log_dir='log')
-    #callback for early stopping
-    es = tf.keras.callbacks.EarlyStopping(monitor='val_loss', patience=5)
-    cp = tf.keras.callbacks.ModelCheckpoint(monitor='val_categorical_accuracy', mode='max', save_best_only=True, filepath=os.path.join('models',f'_best.h5'))
+    model_1 = model_design(image_WH, image_WH) #initialising model for training
+    
+    opt = tf.keras.optimizers.Adamax(learning_rate=0.01)
+    model_1.compile(loss='categorical_crossentropy', 
+                  optimizer=opt, 
+                  metrics=['categorical_accuracy'])
+
     print('\nawaiting for GYM opening')
 
-    hist = model.fit(train_ds, 
+    callbacks = [
+        tf.keras.callbacks.ReduceLROnPlateau(monitor = 'val_loss', factor = 0.5, patience = 3, min_lr = 0.00001),
+        tf.keras.callbacks.ModelCheckpoint(monitor='val_categorical_accuracy', mode='max', save_best_only=True, filepath=os.path.join('models',f'_best.h5'), verbose=1),
+        tf.keras.callbacks.EarlyStopping(monitor='val_categorical_accuracy', patience=5, restore_best_weights=True)
+    ]
+
+
+    print('stage 1')
+    hist = model_1.fit(train_ds, 
                      epochs=epocs_num, 
                      steps_per_epoch = train_ds.samples // bathsize, 
                      validation_data=val_ds, validation_steps = val_ds.samples // bathsize, 
-                     callbacks=[tensor_callback, es, cp]
+                     callbacks=[callbacks]
                      ) ##Gym for  model
     
-    #pc_save_model(model, image_classes)
-
-    best_model = _load_model('_best')
-    best_model.trainable = True ##поставить на ночь
-    train_ds.reset()
-    val_ds.reset()
-
-    #for layer in best_model.layers:
-    #    # Boolean whether this layer is trainable.
-    #    trainable = ('block' in layer.name
-    #                 or 'bn' in layer.name
-    #                 or 'relu' in layer.name
-    #                 or 'input' in layer.name
-    #                 or 'pad' in layer.name
-    #                 or 'conv' in layer.name
-    #                 or 'pool' in layer.name
-    #                 or 'max' in layer.name)
+    pc_save_model(model_1, image_classes, 'tmp1')
     
-    #    # Set the layer's bool.
-    #    layer.trainable = trainable
+    #__________________stage_2
+    
+    print('stage 2')
+    model_2 = _load_model('_best')
+    model_2.trainable = True        
+    model_2 = freeze_base_layers(model_2, frozen_per_layers=0.75)
 
-    for layer in best_model.layers:
-        print("{0}:\t{1}".format(layer.trainable, layer.name))
-
-    opt = tf.keras.optimizers.Adam(learning_rate=1e-5)
-    best_model.compile(loss='categorical_crossentropy', 
+   
+    opt = tf.keras.optimizers.Adam(learning_rate=0.0001)
+    model_2.compile(loss='categorical_crossentropy', 
                   optimizer=opt, 
                   metrics=['categorical_accuracy'])
     
 
-    hist = best_model.fit(train_ds, 
-                     epochs=epocs_num // 2, 
+    hist = model_2.fit(train_ds, 
+                     epochs=10, 
                      steps_per_epoch = train_ds.samples // bathsize, 
                      validation_data=val_ds, validation_steps = val_ds.samples // bathsize, 
-                     callbacks=[tensor_callback, es, cp]
+                     callbacks=[callbacks]
+                     ) ##Finetuning the model
+    
+    pc_save_model(model_2, image_classes, 'tmp2')
+
+    #___________________________stage_3
+
+    print('stage 3')
+    model_3 = _load_model('_best')
+    model_3.trainable = True      
+    model_3 = freeze_base_layers(model_2, frozen_per_layers=0.5)
+
+    opt = tf.keras.optimizers.Adam(learning_rate=0.00001)
+    model_3.compile(loss='categorical_crossentropy', 
+                  optimizer=opt, 
+                  metrics=['categorical_accuracy'])
+    
+
+    hist = model_3.fit(train_ds, 
+                     epochs=15, 
+                     steps_per_epoch = train_ds.samples // bathsize, 
+                     validation_data=val_ds, validation_steps = val_ds.samples // bathsize, 
+                     callbacks=[callbacks]
                      ) ##Finetuning the model
 
-    
-    pc_save_model(best_model, image_classes)
 
+  
+    pc_save_model(model_3, image_classes, 'tmp3')
+
+    #_____________stage_4
+    print('stage 4')
+    model_4 = _load_model('_best')
+    model_4.trainable = True      
+    model_4 = freeze_base_layers(model_2, frozen_per_layers=0)
+
+   
+    
+
+    opt = tf.keras.optimizers.Adamax(learning_rate=0.000001)
+    model_4.compile(loss='categorical_crossentropy', 
+                  optimizer=opt, 
+                  metrics=['categorical_accuracy'])
+    
+
+    hist = model_4.fit(train_ds, 
+                     epochs=20, 
+                     steps_per_epoch = train_ds.samples // bathsize, 
+                     validation_data=val_ds, validation_steps = val_ds.samples // bathsize, 
+                     callbacks=[callbacks]
+                     ) ##Finetuning the model
+
+    pc_save_model(model_4, image_classes, 'tmp4')
+    
     hist_graph(hist)
 
-    #presison_accuracy_recall(model, test_ds)
-    result = best_model.evaluate(test_ds)
-    print(f"Test-set classification accuracy: {result[1]}")
 
-    user_save_model(best_model, image_classes)
+    print('evaluating model')
+    presison_accuracy_recall(model_4, test_ds)
+    result = model_4.evaluate(test_ds)
+    print(f"stage 4 Test-set classification accuracy: {result[1]}")
+
+    user_save_model(model_4, image_classes)
     
-    #image_path='229280_800.jpg'
-    #print(f'prediction: {test_model(model, image_classes, image_path)}')
 
 #testing with unknown for CNN picture
 def test_model(model, image_classes, image_path):

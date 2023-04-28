@@ -11,7 +11,7 @@
     <OutputPath>.</OutputPath>
     <Name>MCPP_SSD</Name>
     <RootNamespace>MCPP_SSD</RootNamespace>
-    <InterpreterId>CondaEnv|CondaEnv|CondaML39</InterpreterId>
+    <InterpreterId>Global|PythonCore|3.9</InterpreterId>
   </PropertyGroup>
   <PropertyGroup Condition=" '$(Configuration)' == 'Debug' ">
     <DebugSymbols>true</DebugSymbols>
